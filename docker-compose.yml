@@ -10,7 +10,9 @@ services:
       dockerfile: ./docker/golang.Dockerfile
     restart: "on-failure"
     ports:
-      - "3000:3000"
+      # Host port configurable (default 3000). VPS example: GOWA_HOST_PORT=4719
+      # Container always listens on 3000 internally.
+      - "${GOWA_HOST_PORT:-3000}:3000"
     env_file:
       - src/.env
     volumes:

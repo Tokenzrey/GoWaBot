@@ -1,74 +1,86 @@
-# Migrasi GOWA: Local → VPS (Cloudflare Tunnel)
+# Migrasi GOWA: Local → VPS (clone, deploy Docker, Cloudflare Tunnel)
 
-Panduan pindahin GOWA dari mesin lokal (WSL) ke VPS kamu, pakai domain yang sama
-(`gowatokenzrey.my.id`), tunnel Cloudflare yang sama (ID tunnel tidak berubah, jadi **tidak perlu
-ubah DNS sama sekali**). VPS kamu udah punya `cloudflared` terpasang dan repo ini udah di-clone —
-tinggal sambungin.
+Panduan lengkap mindahin GOWA dari mesin lokal (WSL) ke VPS: dari `git clone` di VPS, setup repo,
+deploy via Docker, sambungin ke Cloudflare Tunnel pakai domain yang sama (`gowatokenzrey.my.id`),
+sampai bener-bener bisa diakses publik — lalu matiin yang lokal supaya tidak tabrakan.
 
-## Yang dipindah vs yang tidak
+Domain dan tunnel ID **tidak berubah**. CNAME `gowatokenzrey.my.id` sudah nunjuk ke tunnel ID
+`d0cfe822-70b4-4466-9d2d-f8efa1250f2a`; origin-nya (yang jalanin tunnel) tinggal pindah ke VPS asal
+file kredensialnya ikut. **Tidak perlu `cloudflared tunnel login` / `route dns` ulang.**
 
-| Item | Dipindah? | Kenapa |
+---
+
+## Prinsip cutover: matiin lokal DULUAN
+
+GOWA nyimpen **state** di `storages/` — sesi login WhatsApp (device sudah ke-pair), history chat,
+dan **config webhook per-device** (URL + secret financetrack yang sudah dibenerin). SQLite ini harus
+di-copy dalam keadaan proses **berhenti** biar konsisten.
+
+Kalau tunnel lokal + VPS nyala barengan dengan tunnel ID yang sama, Cloudflare anggap 2 replika dan
+load-balance random — sebagian request kehandle instance lokal (punya sesi), sebagian ke VPS (masih
+kosong). Split-brain. Jadi urutannya: **stop lokal → copy state → start VPS**. Ada downtime beberapa
+menit, tapi bersih dan sesi WhatsApp tidak perlu scan QR ulang.
+
+---
+
+## Apa yang pindah
+
+| Item | Cara | Kenapa |
 |---|---|---|
-| Tunnel ID `d0cfe822-70b4-4466-9d2d-f8efa1250f2a` | **Tetap dipakai** | DNS CNAME `gowatokenzrey.my.id` sudah nunjuk ke ID ini — origin-nya bisa pindah tempat asal file kredensialnya ikut pindah, tidak perlu `route dns` ulang |
-| File kredensial tunnel (`d0cfe822-....json`) | **Copy ke VPS** | Ini yang membuktikan ke Cloudflare bahwa VPS berhak run tunnel itu |
-| `src/.env` | **Copy ke VPS** | Tidak ikut git (`.gitignore`), harus dipindah manual |
-| `storages/`, `statics/` | **Tidak perlu** (saat ini) | Belum ada device yang login (`/devices` masih kosong) — VPS mulai dari kondisi bersih dan login ulang lewat QR di sana. Kalau kamu sempat scan QR duluan di lokal sebelum migrasi, baru copy dua folder ini juga. |
+| Kode repo | `git clone` fresh di VPS | Line ending otomatis LF di Linux (`.gitattributes` sudah ngurus) |
+| `src/.env` | `scp` manual | Di-`.gitignore`, isinya basic-auth + config |
+| `storages/` | `scp -r` manual (setelah lokal mati) | Sesi login WA, chat DB, webhook per-device. Di-`.gitignore` |
+| `statics/` | `scp -r` manual | Media/QR yang sudah ke-download. Di-`.gitignore` |
+| Kredensial tunnel (`d0cfe822-….json`) | `scp` manual ke `~/.cloudflared/gowa/` | Bukti VPS berhak jalanin tunnel ini. **Setara private key** |
+| Tunnel ID + DNS | — | Dipakai apa adanya, nol perubahan |
 
-## 0. Prasyarat di VPS
+---
 
-Cek Docker sudah ada (repo ini jalan via `docker compose`, sama seperti di lokal):
+## FASE A — Siapin VPS (belum matiin lokal)
+
+### A1. Clone repo di VPS
+
+```bash
+ssh <user>@<vps-ip>
+git clone https://github.com/aldinokemal/go-whatsapp-web-multidevice.git ~/gowa
+cd ~/gowa
+```
+
+> Ganti URL kalau kamu pakai fork sendiri. Sisa panduan pakai `~/gowa` sebagai folder repo.
+
+### A2. Pastikan Docker ada
 
 ```bash
 docker --version && docker compose version
 ```
 
-Kalau belum ada, install dulu (Ubuntu/Debian):
+Kalau belum ada (Ubuntu/Debian):
 
 ```bash
 curl -fsSL https://get.docker.com | sudo sh
-sudo usermod -aG docker $USER   # logout/login lagi biar grup berlaku
+sudo usermod -aG docker $USER
+# logout lalu ssh lagi biar grup docker kebaca
 ```
 
-`cloudflared` di VPS kamu sudah ada di `/usr/local/bin/cloudflared` (kebukti dari tunnel-tunnel lain
-yang sudah jalan) — tidak perlu install ulang.
+`cloudflared` di VPS sudah terpasang di `/usr/local/bin/cloudflared` (kebukti dari tunnel `koperasi`,
+`sonarqube`, dll yang sudah jalan) — tidak usah install ulang.
 
-## 1. Copy file kredensial tunnel dari lokal ke VPS
+### A3. Copy kredensial tunnel ke VPS
 
-Di **lokal** (WSL), file kredensialnya ada di:
-
-```text
-~/.cloudflared/d0cfe822-70b4-4466-9d2d-f8efa1250f2a.json
-```
-
-Copy ke VPS pakai `scp` (jalankan dari WSL lokal):
+Di **WSL lokal**:
 
 ```bash
-scp ~/.cloudflared/d0cfe822-70b4-4466-9d2d-f8efa1250f2a.json <user>@<vps-ip>:~/.cloudflared/gowa/
+ssh <user>@<vps-ip> 'mkdir -p ~/.cloudflared/gowa'
+scp ~/.cloudflared/d0cfe822-70b4-4466-9d2d-f8efa1250f2a.json \
+    <user>@<vps-ip>:~/.cloudflared/gowa/
 ```
 
-Kalau folder `~/.cloudflared/gowa/` belum ada di VPS, bikin dulu:
+> Jangan pernah taruh isi file ini di git / chat / markdown. Pindahin file-nya langsung aja.
 
-```bash
-mkdir -p ~/.cloudflared/gowa
-```
+### A4. Buat config tunnel di VPS
 
-> File ini setara private key — jangan pernah taruh isinya di git, chat, atau markdown manapun.
-> Cukup pindah file-nya langsung lewat `scp`.
-
-## 2. Copy `src/.env` dari lokal ke VPS
-
-```bash
-scp /path/ke/repo/src/.env <user>@<vps-ip>:~/path/ke/repo/src/.env
-```
-
-File ini isinya basic-auth production dan config lain — sama seperti di lokal, jangan commit ke git.
-
-## 3. Buat config tunnel di VPS
-
-Ikutin pola yang sudah kamu pakai buat `koperasi`, `sonarqube`, dll — satu folder per app di bawah
-`~/.cloudflared/`.
-
-`~/.cloudflared/gowa/config.yml`:
+`~/.cloudflared/gowa/config.yml` (ikutin pola `koperasi/config.yml` punyamu — path **absolut**).
+Di VPS ini GOWA di-publish ke **port host 4719** (bukan 3000), jadi `service` nunjuk ke situ:
 
 ```yaml
 tunnel: d0cfe822-70b4-4466-9d2d-f8efa1250f2a
@@ -76,16 +88,16 @@ credentials-file: /home/<user>/.cloudflared/gowa/d0cfe822-70b4-4466-9d2d-f8efa12
 
 ingress:
   - hostname: gowatokenzrey.my.id
-    service: http://localhost:3000
+    service: http://localhost:4719
   - service: http_status:404
 ```
 
-Ganti `<user>` sesuai username VPS kamu (path harus absolut, sama kayak `credentials-file` di
-`koperasi/config.yml` punyamu).
+> **Port forwarding**: container GOWA tetap listen di `3000` di dalamnya. `docker-compose.yml`
+> mem-publish `${GOWA_HOST_PORT:-3000}:3000`, jadi set `GOWA_HOST_PORT=4719` (langkah C1) bikin
+> host jadi `4719 → 3000`. Mau port lain tinggal ganti angkanya di dua tempat: root `.env` dan
+> `config.yml` ini.
 
-## 4. Daftarin sebagai systemd service
-
-Sama persis pola `koperasi/setup-service.sh` kamu:
+### A5. Daftarin systemd service (belum di-`start`)
 
 ```bash
 sudo tee /etc/systemd/system/cloudflared-gowa.service > /dev/null <<EOF
@@ -108,79 +120,182 @@ sudo systemctl daemon-reload
 sudo systemctl enable cloudflared-gowa
 ```
 
-Jangan `start` dulu — nyalain GOWA-nya dulu di langkah berikut, biar pas tunnel connect,
-`localhost:3000` sudah ada yang jawab.
+Jangan `start` dulu — nanti setelah GOWA-nya nyala di VPS.
 
-## 5. Jalankan GOWA di VPS
+---
 
-Masuk ke folder repo di VPS, lalu **jalankan cuma service app-nya** — `cloudflared` biar systemd
-yang pegang (bukan sidecar di `docker-compose.yml`, itu dipakai buat setup lokal doang):
+## FASE B — Matiin lokal
+
+### B1. Stop stack Docker lokal
+
+Di **WSL lokal**, di folder repo:
 
 ```bash
-cd ~/path/ke/repo
+docker compose down
+```
+
+Ini matiin container app (`whatsapp_go`) **dan** sidecar `cloudflared` lokal sekaligus (dua-duanya
+di [docker-compose.yml](../docker-compose.yml) yang sama). Sesi SQLite di `storages/` sekarang bebas
+lock.
+
+### B2. Bersihin sisa proses lokal (kalau ada)
+
+Selama sesi setup kemarin sempat ada yang jalan manual. Pastikan port 3000 bener-bener kosong dan
+tidak ada `cloudflared` nyangkut:
+
+```bash
+# di WSL lokal
+docker compose ps                 # harus kosong
+ss -ltnp | grep ':3000' || echo "port 3000 bebas"
+pgrep -af cloudflared || echo "tidak ada cloudflared jalan"
+pgrep -af 'whatsapp rest|go run' || echo "tidak ada gowa native jalan"
+```
+
+Kalau masih ada yang nyangkut, matiin (`kill <pid>` atau `docker rm -f <name>`).
+
+### B3. Verifikasi domain sudah "mati" sementara
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://gowatokenzrey.my.id/health
+```
+
+Harus `530` / `502` / timeout — artinya betul tidak ada origin lagi. (Ini window downtime, lanjut
+cepat ke Fase C.)
+
+---
+
+## FASE C — Nyalain di VPS
+
+### C1. Copy `src/.env` + state ke VPS, lalu set port host
+
+Di **WSL lokal**, di folder repo:
+
+```bash
+scp src/.env <user>@<vps-ip>:~/gowa/src/.env
+scp -r storages <user>@<vps-ip>:~/gowa/
+scp -r statics  <user>@<vps-ip>:~/gowa/
+```
+
+> `storages/` bawa sesi login WA + webhook per-device. Kalau di-skip, di VPS kamu harus scan QR ulang
+> **dan** set ulang webhook device (`PATCH /devices/:id/webhook`).
+
+Di **VPS**, set port host jadi 4719 lewat root `.env` repo (dibaca otomatis oleh `docker compose`
+buat interpolasi; file ini di-`.gitignore`):
+
+```bash
+cd ~/gowa
+echo 'GOWA_HOST_PORT=4719' > .env
+```
+
+> `.env` (root repo) ≠ `src/.env`. Yang root cuma buat variabel `docker compose`; `src/.env` yang
+> dibaca aplikasi GOWA. `APP_PORT` di `src/.env` biarin `3000` — itu port **di dalam** container.
+
+### C2. Build + jalanin GOWA di VPS
+
+Di VPS, di `~/gowa`:
+
+```bash
 docker compose up -d --build whatsapp_go
 ```
 
-Cek jalan:
+> **Wajib sebut `whatsapp_go`.** Jangan `docker compose up -d` polos — itu ikut nyalain service
+> `cloudflared` sidecar dari compose file, yang bakal bentrok sama systemd `cloudflared-gowa`.
+> Alternatif: hapus blok `cloudflared:` dari `docker-compose.yml` di VPS.
+
+Cek app (port host **4719**):
 
 ```bash
-curl -s http://localhost:3000/health
-# harus: OK
+curl -s http://localhost:4719/health          # harus: OK
+curl -s -u admin:<password> http://localhost:4719/devices
+# device "Njay Mabar" harus muncul dengan "state":"logged_in"
+
+docker compose ps
+# PORTS harus: 0.0.0.0:4719->3000/tcp
 ```
 
-## 6. Nyalain tunnel
+Kalau device-nya `logged_in` → sesi kepindah mulus, tidak perlu scan QR.
+
+### C3. Nyalain tunnel
 
 ```bash
 sudo systemctl start cloudflared-gowa
 sudo systemctl status cloudflared-gowa --no-pager
+journalctl -u cloudflared-gowa -n 20 --no-pager
 ```
 
-Log harus nunjukin `Registered tunnel connection` beberapa kali (mirip yang muncul pas kamu setup
-di lokal kemarin).
+Log harus ada `Registered tunnel connection` beberapa kali.
 
-## 7. Verifikasi dari luar
+### C4. Verifikasi publik
+
+Dari mana aja (bukan VPS):
 
 ```bash
-curl -s https://gowatokenzrey.my.id/health
-# harus: OK
+curl -s https://gowatokenzrey.my.id/health                         # OK
+curl -s -u admin:<password> https://gowatokenzrey.my.id/devices    # device logged_in
 ```
 
-Kalau ini sukses **sambil tunnel lokal masih nyala**, dua origin (lokal + VPS) sama-sama ngelayanin
-domain yang sama untuk sementara (Cloudflare load-balance otomatis antar koneksi tunnel yang sama).
-Aman — tidak akan bentrok, tinggal matiin yang lokal kapan saja di langkah berikut.
-
-## 8. Login WhatsApp (kalau belum pernah login sama sekali)
+Kirim 1 pesan WA ke nomor bot dari HP lain → cek log webhook:
 
 ```bash
-curl -u admin:<password> -X POST https://gowatokenzrey.my.id/devices
-curl -u admin:<password> https://gowatokenzrey.my.id/devices/<device_id>/login
-# scan QR dari WhatsApp: Linked Devices > Link a Device
+docker compose logs whatsapp_go --since=2m | grep -i webhook
+# harus: "Successfully submitted webhook on attempt 1"
 ```
 
-Kalau kamu sudah pernah login di lokal dan copy folder `storages/` + `statics/` ke VPS (lihat tabel
-di atas), lewati langkah ini — sesi WhatsApp-nya udah ikut kepindah.
+---
 
-## 9. Matiin yang di lokal
+## FASE D — Pastikan tidak tabrakan
 
-Setelah VPS kebukti jalan dan `https://gowatokenzrey.my.id/health` sukses lewat VPS:
+Checklist final, jalanin **di WSL lokal**:
 
 ```bash
-# di WSL lokal
-cd /path/ke/repo
-docker compose down
+docker compose ps                                # KOSONG
+ss -ltnp | grep -E ':3000|:4719' || echo ok      # port bebas
+pgrep -af cloudflared || echo ok                 # tidak ada tunnel lokal
 ```
 
-Ini matiin dua-duanya sekaligus — container app (`whatsapp_go`) dan sidecar `cloudflared` lokal
-(karena keduanya didefinisikan di [docker-compose.yml](../docker-compose.yml) yang sama).
+Lalu pastikan `.env` lokal tidak ke-`docker compose up` lagi tanpa sengaja. Kalau mau,
+disable Docker Desktop autostart di Windows.
 
-Selesai — semua traffic sekarang lewat VPS, domain tidak berubah, tidak ada downtime kalau urutan
-di atas diikuti (nyalain VPS dulu, baru matiin lokal).
+Di **VPS**, konfirmasi cuma ada 1 origin:
 
-## Troubleshooting cepat
+```bash
+docker compose ps                       # whatsapp_go Up
+systemctl is-active cloudflared-gowa     # active
+systemctl is-enabled cloudflared-gowa    # enabled (auto-start on boot)
+```
 
-| Gejala | Penyebab umum | Fix |
+Selesai. Semua traffic `gowatokenzrey.my.id` lewat VPS. Domain, tunnel ID, dan sesi WhatsApp tidak
+berubah.
+
+---
+
+## Operasional harian di VPS
+
+```bash
+cd ~/gowa
+docker compose logs -f whatsapp_go          # lihat log app
+docker compose restart whatsapp_go          # restart app (env-only change cukup ini)
+docker compose up -d --build whatsapp_go    # rebuild setelah git pull
+sudo systemctl restart cloudflared-gowa     # restart tunnel
+```
+
+Ganti password / config: edit `~/gowa/src/.env` → `docker compose up -d whatsapp_go`.
+
+Ganti port host (mis. 4719 → port lain): edit `~/gowa/.env` (`GOWA_HOST_PORT=`), edit
+`~/.cloudflared/gowa/config.yml` (`service: http://localhost:<port>`), lalu
+`docker compose up -d whatsapp_go && sudo systemctl restart cloudflared-gowa`.
+
+---
+
+## Troubleshooting
+
+| Gejala | Penyebab | Fix |
 |---|---|---|
-| `cloudflared-gowa` gagal start, log bilang credentials file not found | Path di `config.yml` salah / file belum ke-copy | Cek `ls ~/.cloudflared/gowa/`, pastikan nama file cocok persis dengan `credentials-file` |
-| Tunnel connect tapi `curl https://gowatokenzrey.my.id/health` timeout/502 | `whatsapp_go` container belum jalan atau port beda | `docker compose ps`, `curl localhost:3000/health` di VPS dulu |
-| `docker compose up` gagal build, error `exec /entrypoint.sh: no such file` | Repo di-clone/di-copy dengan line ending CRLF (biasanya kalau di-zip dari Windows) | Pastikan clone lewat `git clone` langsung di VPS (Linux), bukan copy folder dari Windows — `.gitattributes` di repo ini sudah handle ini otomatis kalau lewat git |
-| Basic Auth ditolak di VPS padahal password sama | `src/.env` belum ke-copy atau beda isi | Diff `src/.env` lokal vs VPS, pastikan `APP_BASIC_AUTH` sama |
+| `cloudflared-gowa` gagal start: `credentials file not found` | Path di `config.yml` salah / file belum ke-scp | `ls ~/.cloudflared/gowa/`, samakan nama file dengan field `credentials-file` (path absolut) |
+| Tunnel connect, tapi `curl https://gowatokenzrey.my.id/health` → 502 | Container belum jalan / port `service` di `config.yml` tidak cocok sama `GOWA_HOST_PORT` | `docker compose ps` (lihat kolom PORTS `->3000`); `curl localhost:4719/health` di VPS; samakan angka port di `~/gowa/.env` dan `~/.cloudflared/gowa/config.yml` |
+| `docker compose ps` PORTS masih `3000->3000` padahal sudah set `GOWA_HOST_PORT` | Root `.env` di folder salah / belum `up` ulang | Pastikan `~/gowa/.env` (bukan `src/.env`); `docker compose up -d whatsapp_go` lagi |
+| `docker compose up` gagal build: `exec /entrypoint.sh: no such file` | File `.sh` ke-checkout CRLF | Pastikan **`git clone`** langsung di VPS (Linux), bukan copy folder dari Windows. `.gitattributes` repo sudah paksa LF via git |
+| `/devices` kosong di VPS padahal `storages/` sudah di-copy | Copy sebelum `docker compose down` di lokal (DB ke-lock / korup), atau kepatch di path salah | Ulang: `down` lokal → `scp -r storages` → `up` VPS. Pastikan mendarat di `~/gowa/storages` |
+| Basic Auth ditolak di VPS | `src/.env` belum di-copy / beda | `diff` `src/.env` lokal vs VPS; cek `APP_BASIC_AUTH` |
+| Webhook `403` setelah pindah | `webhook_secret` per-device salah (mis. ke-isi seluruh baris `WHATSAPP_WEBHOOK_SECRET=...`) | `curl -u admin:<pw> -X PATCH .../devices/<id>/webhook -d '{"webhook_url":"<url>","webhook_secret":"<hex-doang>"}'` — `webhook_url` wajib ikut tiap PATCH |
+| Request kadang jalan kadang gagal setelah cutover | Tunnel lokal masih nyala (split-brain) | `docker compose down` + `pkill cloudflared` di lokal; jalanin checklist Fase D |
