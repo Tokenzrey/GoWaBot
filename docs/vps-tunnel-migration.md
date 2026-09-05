@@ -179,38 +179,42 @@ scp -r statics  <user>@<vps-ip>:~/gowa/
 > `storages/` bawa sesi login WA + webhook per-device. Kalau di-skip, di VPS kamu harus scan QR ulang
 > **dan** set ulang webhook device (`PATCH /devices/:id/webhook`).
 
-Di **VPS**, set port host jadi 4719 lewat root `.env` repo (dibaca otomatis oleh `docker compose`
-buat interpolasi; file ini di-`.gitignore`):
+Di **VPS**, set port GOWA di `src/.env` (di host mode ini = port host langsung):
 
 ```bash
-cd ~/gowa
-echo 'GOWA_HOST_PORT=4719' > .env
+cd /var/www/gowa            # folder repo di VPS
+sed -i 's/^APP_PORT=.*/APP_PORT=4719/' src/.env
+grep APP_PORT src/.env      # APP_PORT=4719
 ```
 
-> `.env` (root repo) ≠ `src/.env`. Yang root cuma buat variabel `docker compose`; `src/.env` yang
-> dibaca aplikasi GOWA. `APP_PORT` di `src/.env` biarin `3000` — itu port **di dalam** container.
+### C2. Build + jalanin GOWA di VPS (host network mode)
 
-### C2. Build + jalanin GOWA di VPS
-
-Di VPS, di `~/gowa`:
+VPS ini kehabisan pool subnet Docker (`all predefined address pools have been fully subnetted`)
+karena rame service. Solusi: **host network mode** — container nempel network host langsung, gak
+bikin bridge, gak nyentuh pool. Repo sudah sedia file khusus:
+[docker-compose.vps.yml](../docker-compose.vps.yml).
 
 ```bash
-docker compose up -d --build whatsapp_go
+docker compose -f docker-compose.vps.yml up -d --build
 ```
 
-> **Wajib sebut `whatsapp_go`.** Jangan `docker compose up -d` polos — itu ikut nyalain service
-> `cloudflared` sidecar dari compose file, yang bakal bentrok sama systemd `cloudflared-gowa`.
-> Alternatif: hapus blok `cloudflared:` dari `docker-compose.yml` di VPS.
+File ini: `network_mode: host`, tanpa `ports:`, tanpa service `cloudflared` (tunnel dipegang
+sistem host). GOWA listen di `APP_PORT` (4719) langsung di host.
 
-Cek app (port host **4719**):
+> Kalau suatu saat pool Docker lega lagi dan mau pakai bridge biasa: `docker compose up -d
+> whatsapp_go` (file `docker-compose.yml` default), set port host lewat `GOWA_HOST_PORT=4719` di
+> root `.env` repo (`echo 'GOWA_HOST_PORT=4719' > .env`), dan `src/.env` `APP_PORT` balikin ke
+> `3000`. Jangan `docker compose up -d` polos — itu ikut nyalain sidecar `cloudflared`.
+
+Cek app (port **4719**, langsung di host):
 
 ```bash
-curl -s http://localhost:4719/health          # harus: OK
+curl -s http://localhost:4719/health                                  # harus: OK
 curl -s -u admin:<password> http://localhost:4719/devices
 # device "Njay Mabar" harus muncul dengan "state":"logged_in"
 
-docker compose ps
-# PORTS harus: 0.0.0.0:4719->3000/tcp
+docker compose -f docker-compose.vps.yml ps                           # whatsapp_go Up
+ss -ltnp | grep ':4719'                                               # ada yang listen
 ```
 
 Kalau device-nya `logged_in` → sesi kepindah mulus, tidak perlu scan QR.
@@ -237,7 +241,7 @@ curl -s -u admin:<password> https://gowatokenzrey.my.id/devices    # device logg
 Kirim 1 pesan WA ke nomor bot dari HP lain → cek log webhook:
 
 ```bash
-docker compose logs whatsapp_go --since=2m | grep -i webhook
+docker compose -f docker-compose.vps.yml logs --since=2m | grep -i webhook
 # harus: "Successfully submitted webhook on attempt 1"
 ```
 
@@ -259,9 +263,9 @@ disable Docker Desktop autostart di Windows.
 Di **VPS**, konfirmasi cuma ada 1 origin:
 
 ```bash
-docker compose ps                       # whatsapp_go Up
-systemctl is-active cloudflared-gowa     # active
-systemctl is-enabled cloudflared-gowa    # enabled (auto-start on boot)
+docker compose -f docker-compose.vps.yml ps   # whatsapp_go Up
+systemctl is-active cloudflared-gowa           # active
+systemctl is-enabled cloudflared-gowa          # enabled (auto-start on boot)
 ```
 
 Selesai. Semua traffic `gowatokenzrey.my.id` lewat VPS. Domain, tunnel ID, dan sesi WhatsApp tidak
@@ -271,19 +275,21 @@ berubah.
 
 ## Operasional harian di VPS
 
+Semua perintah di folder repo (`/var/www/gowa`), selalu dengan `-f docker-compose.vps.yml`:
+
 ```bash
-cd ~/gowa
-docker compose logs -f whatsapp_go          # lihat log app
-docker compose restart whatsapp_go          # restart app (env-only change cukup ini)
-docker compose up -d --build whatsapp_go    # rebuild setelah git pull
-sudo systemctl restart cloudflared-gowa     # restart tunnel
+dc="docker compose -f docker-compose.vps.yml"
+$dc logs -f                 # lihat log app
+$dc restart                 # restart app (perubahan env-only cukup ini)
+$dc up -d --build           # rebuild setelah git pull
+sudo systemctl restart cloudflared-gowa   # restart tunnel
 ```
 
-Ganti password / config: edit `~/gowa/src/.env` → `docker compose up -d whatsapp_go`.
+Ganti password / config: edit `src/.env` → `docker compose -f docker-compose.vps.yml up -d`.
 
-Ganti port host (mis. 4719 → port lain): edit `~/gowa/.env` (`GOWA_HOST_PORT=`), edit
+Ganti port (mis. 4719 → lain): edit `APP_PORT` di `src/.env`, edit
 `~/.cloudflared/gowa/config.yml` (`service: http://localhost:<port>`), lalu
-`docker compose up -d whatsapp_go && sudo systemctl restart cloudflared-gowa`.
+`docker compose -f docker-compose.vps.yml up -d && sudo systemctl restart cloudflared-gowa`.
 
 ---
 
@@ -292,10 +298,11 @@ Ganti port host (mis. 4719 → port lain): edit `~/gowa/.env` (`GOWA_HOST_PORT=`
 | Gejala | Penyebab | Fix |
 |---|---|---|
 | `cloudflared-gowa` gagal start: `credentials file not found` | Path di `config.yml` salah / file belum ke-scp | `ls ~/.cloudflared/gowa/`, samakan nama file dengan field `credentials-file` (path absolut) |
-| Tunnel connect, tapi `curl https://gowatokenzrey.my.id/health` → 502 | Container belum jalan / port `service` di `config.yml` tidak cocok sama `GOWA_HOST_PORT` | `docker compose ps` (lihat kolom PORTS `->3000`); `curl localhost:4719/health` di VPS; samakan angka port di `~/gowa/.env` dan `~/.cloudflared/gowa/config.yml` |
-| `docker compose ps` PORTS masih `3000->3000` padahal sudah set `GOWA_HOST_PORT` | Root `.env` di folder salah / belum `up` ulang | Pastikan `~/gowa/.env` (bukan `src/.env`); `docker compose up -d whatsapp_go` lagi |
+| Tunnel connect, tapi `curl https://gowatokenzrey.my.id/health` → 502 | App belum jalan / port `service` di `config.yml` ≠ `APP_PORT` | `curl localhost:4719/health` di VPS dulu; samakan `APP_PORT` di `src/.env` dengan `service:` di `~/.cloudflared/gowa/config.yml` |
+| `ss -ltnp | grep 4719` kosong setelah `up` | `APP_PORT` di `src/.env` belum 4719, atau container gagal start | `grep APP_PORT src/.env`; `docker compose -f docker-compose.vps.yml logs --tail=50` |
+| Build sukses tapi `Error ... all predefined address pools have been fully subnetted` | Pool subnet Docker di VPS habis (kebanyakan network) | Pakai `docker compose -f docker-compose.vps.yml up -d --build` (host mode, gak bikin bridge). `docker network prune -f` bisa bantu kalau mau tetap bridge |
 | `docker compose up` gagal build: `exec /entrypoint.sh: no such file` | File `.sh` ke-checkout CRLF | Pastikan **`git clone`** langsung di VPS (Linux), bukan copy folder dari Windows. `.gitattributes` repo sudah paksa LF via git |
-| `/devices` kosong di VPS padahal `storages/` sudah di-copy | Copy sebelum `docker compose down` di lokal (DB ke-lock / korup), atau kepatch di path salah | Ulang: `down` lokal → `scp -r storages` → `up` VPS. Pastikan mendarat di `~/gowa/storages` |
+| `/devices` kosong di VPS padahal `storages/` sudah di-copy | Copy sebelum `docker compose down` di lokal (DB ke-lock / korup), atau mendarat di path salah | Ulang: `down` lokal → `scp -r storages` → `up` VPS. Pastikan mendarat di `<repo>/storages` |
 | Basic Auth ditolak di VPS | `src/.env` belum di-copy / beda | `diff` `src/.env` lokal vs VPS; cek `APP_BASIC_AUTH` |
 | Webhook `403` setelah pindah | `webhook_secret` per-device salah (mis. ke-isi seluruh baris `WHATSAPP_WEBHOOK_SECRET=...`) | `curl -u admin:<pw> -X PATCH .../devices/<id>/webhook -d '{"webhook_url":"<url>","webhook_secret":"<hex-doang>"}'` — `webhook_url` wajib ikut tiap PATCH |
 | Request kadang jalan kadang gagal setelah cutover | Tunnel lokal masih nyala (split-brain) | `docker compose down` + `pkill cloudflared` di lokal; jalanin checklist Fase D |

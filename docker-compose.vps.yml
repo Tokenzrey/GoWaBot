@@ -1,0 +1,32 @@
+# VPS deployment: host network mode.
+#
+# Use this INSTEAD of docker-compose.yml on hosts where Docker's bridge address
+# pool is exhausted ("all predefined address pools have been fully subnetted"),
+# common on VPSes running many compose projects. Host mode skips creating a
+# bridge network entirely.
+#
+#   docker compose -f docker-compose.vps.yml up -d --build
+#
+# The container joins the host network directly and listens on APP_PORT from
+# src/.env (set APP_PORT=4719 there). No `ports:` mapping, no bridge, no
+# cloudflared sidecar — run cloudflared as a host service (systemd) pointing at
+# http://localhost:<APP_PORT>. See docs/vps-tunnel-migration.md.
+
+services:
+  whatsapp_go:
+    build:
+      context: .
+      dockerfile: ./docker/golang.Dockerfile
+    restart: "on-failure"
+    network_mode: "host"
+    env_file:
+      - src/.env
+    volumes:
+      # Persist WhatsApp + chat DBs; entrypoint chowns for gowauser (uid 20001, gid 20000) on start.
+      - ./storages:/app/storages
+      - ./statics:/app/statics
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "200k"
+        max-file: "10"
