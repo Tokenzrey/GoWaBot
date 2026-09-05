@@ -17,3 +17,12 @@ services:
       # Persist WhatsApp + chat DBs; entrypoint chowns for gowauser (uid 20001, gid 20000) on start.
       - ./storages:/app/storages
       - ./statics:/app/statics
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: "on-failure"
+    command: tunnel --config /etc/cloudflared/config.yml run
+    volumes:
+      - ./cloudflared:/etc/cloudflared:ro
+    depends_on:
+      - whatsapp_go

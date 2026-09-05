@@ -15,6 +15,9 @@ storages/
 # Environment
 .env
 
+# Cloudflare Tunnel credentials
+cloudflared/
+
 # Runtime media & QR codes
 statics/
 
