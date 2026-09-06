@@ -86,7 +86,7 @@ Message actions (act on an existing `message_id`):
 | `POST /message/:message_id/delete` | delete for me |
 | `POST /message/:message_id/update` | edit text |
 | `POST /message/:message_id/read` | mark read |
-| `GET /message/:message_id/download` | download media from that message |
+| `GET /message/:message_id/download?phone=<chat_jid>` | download media. **`phone` query param is REQUIRED** — omit it and GOWA returns HTTP 400 `phone: cannot be blank`. Response is JSON `{results:{file_url,file_path,media_type}}` (not raw bytes): take `file_url`, then fetch it with the same Basic Auth. |
 
 ## Receiving messages (user → bot)
 
