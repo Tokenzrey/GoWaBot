@@ -2,12 +2,14 @@ package cmd
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/config"
 	domainChatStorage "github.com/aldinokemal/go-whatsapp-web-multidevice/domains/chatstorage"
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/infrastructure/chatwoot"
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/infrastructure/whatsapp"
+	"github.com/aldinokemal/go-whatsapp-web-multidevice/pkg/heartbeat"
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/ui/rest/helpers"
 	"github.com/sirupsen/logrus"
 	"go.mau.fi/whatsmeow"
@@ -94,5 +96,26 @@ func startPresencePulseSchedulerIfEnabled() {
 			config.WhatsappPresencePulseDuration,
 		)
 		logrus.Infof("presence pulse scheduler started; interval=%s duration=%s", config.WhatsappPresencePulseInterval, config.WhatsappPresencePulseDuration)
+	})
+}
+
+var productivityHeartbeatOnce sync.Once
+
+// startProductivityCronHeartbeatIfEnabled starts the Finance-FE cron heartbeat once.
+func startProductivityCronHeartbeatIfEnabled() {
+	if config.ProductivityCronBaseURL == "" {
+		logrus.Info("productivity cron heartbeat disabled")
+		return
+	}
+	productivityHeartbeatOnce.Do(func() {
+		base := strings.TrimRight(config.ProductivityCronBaseURL, "/")
+		heartbeat.Start(context.Background(), heartbeat.Config{
+			RemindersURL: base + "/reminders",
+			DigestURL:    base + "/daily-digest",
+			Secret:       config.ProductivityCronSecret,
+			Interval:     config.ProductivityCronInterval,
+			Enabled:      true,
+		})
+		logrus.Infof("productivity cron heartbeat started; base=%s interval=%s", base, config.ProductivityCronInterval)
 	})
 }

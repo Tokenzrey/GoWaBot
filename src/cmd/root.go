@@ -213,6 +213,20 @@ func initEnvConfig() {
 		}
 	}
 
+	// Productivity cron heartbeat: opt-in via PRODUCTIVITY_CRON_URL. When the
+	// base URL is empty the heartbeat goroutine never starts.
+	if envCronURL := viper.GetString("productivity_cron_url"); envCronURL != "" {
+		config.ProductivityCronBaseURL = envCronURL
+	}
+	if envCronSecret := viper.GetString("productivity_cron_secret"); envCronSecret != "" {
+		config.ProductivityCronSecret = envCronSecret
+	}
+	if viper.IsSet("productivity_cron_interval") {
+		if interval := viper.GetDuration("productivity_cron_interval"); interval > 0 {
+			config.ProductivityCronInterval = interval
+		}
+	}
+
 	// Chatwoot settings
 	if viper.IsSet("chatwoot_enabled") {
 		config.ChatwootEnabled = viper.GetBool("chatwoot_enabled")
