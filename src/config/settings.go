@@ -66,6 +66,13 @@ var (
 	WhatsappPresencePulseInterval              = 24 * time.Hour
 	WhatsappPresencePulseDuration              = 5 * time.Minute
 
+	// Productivity cron heartbeat: this process POSTs the Finance-FE cron
+	// endpoints on a timer (that app has no always-on runtime of its own).
+	// Opt-in: empty ProductivityCronBaseURL disables it.
+	ProductivityCronBaseURL  = ""
+	ProductivityCronSecret   = ""
+	ProductivityCronInterval = 60 * time.Second
+
 	// WhatsappProxy is forwarded to whatsmeow's *Client.SetProxyAddress before
 	// Connect. Accepts SOCKS5/HTTP/HTTPS schemes, e.g.
 	// "socks5://user:pass@host:1080" or "http://host:8080". Empty = direct

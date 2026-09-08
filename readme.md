@@ -134,6 +134,10 @@ Download:
   - `--presence-pulse-enabled=true` or `WHATSAPP_PRESENCE_PULSE_ENABLED=true` (default: `true`).
   - `--presence-pulse-interval=24h` controls how often each connected device is pulsed.
   - `--presence-pulse-duration=5m` controls how long the account stays `available` before returning to `unavailable`.
+- Productivity cron heartbeat (drives the sibling Finance-FE reminders + morning digest, which has no always-on runtime of its own):
+  - `PRODUCTIVITY_CRON_URL` — base URL of the Finance-FE cron API, e.g. `https://<app>/api/cron`. Empty (default) disables the heartbeat. When set, this process `POST`s `<base>/reminders` every tick and `<base>/daily-digest` every 15th tick, with header `Authorization: Bearer <PRODUCTIVITY_CRON_SECRET>` and an empty body. Non-2xx responses and network errors are logged and swallowed.
+  - `PRODUCTIVITY_CRON_SECRET` — shared secret sent as the bearer token.
+  - `PRODUCTIVITY_CRON_INTERVAL` — tick interval (default `60s`).
 - Webhooks for received messages and other events:
   - `--webhook="http://yourwebhook.site/handler"`
   - Short form: `-w="http://yourwebhook.site/handler"`
@@ -264,6 +268,9 @@ To use environment variables:
 | `WHATSAPP_PRESENCE_PULSE_ENABLED`       | Enable daily available/unavailable presence pulse             | `true`                                       | `WHATSAPP_PRESENCE_PULSE_ENABLED=false`       |
 | `WHATSAPP_PRESENCE_PULSE_INTERVAL`      | Interval between presence pulses                              | `24h`                                        | `WHATSAPP_PRESENCE_PULSE_INTERVAL=24h`        |
 | `WHATSAPP_PRESENCE_PULSE_DURATION`      | Duration to stay available during each pulse                  | `5m`                                         | `WHATSAPP_PRESENCE_PULSE_DURATION=5m`         |
+| `PRODUCTIVITY_CRON_URL`                 | Finance-FE cron API base URL; empty disables the heartbeat    | -                                            | `PRODUCTIVITY_CRON_URL=https://app/api/cron`  |
+| `PRODUCTIVITY_CRON_SECRET`             | Bearer token sent to the Finance-FE cron endpoints            | -                                            | `PRODUCTIVITY_CRON_SECRET=your-secret`        |
+| `PRODUCTIVITY_CRON_INTERVAL`           | Heartbeat tick interval (digest fires every 15th tick)        | `60s`                                        | `PRODUCTIVITY_CRON_INTERVAL=60s`              |
 | `CHATWOOT_ENABLED`                      | Enable Chatwoot integration                                   | `false`                                      | `CHATWOOT_ENABLED=true`                       |
 | `CHATWOOT_URL`                          | Chatwoot instance URL                                         | -                                            | `CHATWOOT_URL=https://app.chatwoot.com`       |
 | `CHATWOOT_API_TOKEN`                    | Chatwoot API access token                                     | -                                            | `CHATWOOT_API_TOKEN=your-api-token`           |
